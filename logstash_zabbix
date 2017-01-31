@@ -1,0 +1,114 @@
+#!/usr/bin/env python
+"""."""
+import os
+import optparse
+import tempfile
+import logging
+import subprocess
+import requests
+
+class LogstashAPI(object):
+    """Class for Logstash _node API"""
+
+    def __init__(self, root_url='http://localhost:9600/',
+                 conf='/etc/zabbix/zabbix_agentd.conf', senderhostname=None):
+        self.root_url = root_url
+        self.conf = conf
+        self.senderhostname = senderhostname
+        self.metric_list = []
+
+    def call_api(self, path='_node/stats'):
+        """Call the API and serialize the output"""
+        logging.debug("Querying Logstash api [%s] on [%s]", self.root_url, path)
+        url = "{0}{1}".format(self.root_url, path)
+        return requests.get(url).json()
+
+    def get_nested_values(self, values, metric_list, path):
+        """Recursively iterate over the stats object and capture all leaves with
+           numerical values"""
+
+        if not isinstance(values, dict):
+            if isinstance(values, (int, float)):
+                metric_list.append((path, values))
+            return
+
+        for sub_node in values:
+            if path:
+                key = '{0}_{1}'.format(path, sub_node)
+            else:
+                key = '{0}'.format(sub_node)
+            self.get_nested_values(values[sub_node], metric_list, key)
+
+    def get_stats(self):
+        """Recursively iterate over the stats object and capture all leaves with
+           numerical values"""
+
+        stats = self.call_api()
+        self.get_nested_values(stats, self.metric_list, None)
+        tmpfile = tempfile.NamedTemporaryFile(delete=False)
+        self.prepare_data(self.metric_list, tmpfile)
+        tmpfile.close()
+        return_code = self.send_data(tmpfile)
+        os.unlink(tmpfile.name)
+        return return_code
+
+    @staticmethod
+    def prepare_data(metrics_tuples, tmpfile):
+        """Prepare the data in tempfile to be send to zabbix with
+           zabbix_sender"""
+        for metric_tuple in metrics_tuples:
+            logging.debug("SENDER_DATA: - %s %s", *metric_tuple)
+            tmpfile.write('- "logstash.stats[{0}]" {1}\n'.format(*metric_tuple))
+
+    def send_data(self, tmpfile):
+        """Send the prepared data to zabbix with zabbix_sender"""
+        cmd = 'zabbix_sender -vv -c {0} -i {1}'
+        if self.senderhostname:
+            cmd = cmd + " -s " + self.senderhostname
+        return_code = 0
+        process = subprocess.Popen(cmd.format(self.conf, tmpfile.name),
+                                   shell=True, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+        out, err = process.communicate()
+        logging.debug("Finished sending data")
+        return_code = process.wait()
+        logging.info("zabbix_sender return code (%s)", return_code)
+        if return_code == 1:
+            logging.error(out)
+            logging.error(err)
+        else:
+            logging.debug(out)
+            logging.debug(err)
+        return return_code
+
+def main():
+    """Main function"""
+    parser = optparse.OptionParser()
+    parser.add_option("--hostname", help="Logstash API hostname",
+                      default='localhost')
+    parser.add_option("--port", help="Logstash API port",
+                      default=9600)
+    parser.add_option("--protocol", help="Logstash API protocol",
+                      choices=['http', 'https'], default='http')
+    parser.add_option("--conf", default="/etc/zabbix/zabbix_agentd.conf")
+    parser.add_option("--senderhostname", default='',
+                      help="Custom sender parameter for zabbix_sender")
+    parser.add_option("--logfile",
+                      help="Error log file",
+                      default="/var/log/zabbix-agent/logstash_zabbix.log")
+    parser.add_option('--loglevel', choices=['ERROR', 'DEBUG', 'INFO'],
+                      default='INFO')
+    (options, args) = parser.parse_args()
+    logging.basicConfig(filename=options.logfile,
+                        level=logging.getLevelName(options.loglevel),
+                        format='%(asctime)s %(levelname)s: %(message)s')
+
+    url = "{0}://{1}:{2}/".format(options.protocol, options.hostname,
+                                  options.port)
+    api = LogstashAPI(url, conf=options.conf,
+                      senderhostname=options.senderhostname)
+    api.get_stats()
+
+
+if __name__ == "__main__":
+    main()
