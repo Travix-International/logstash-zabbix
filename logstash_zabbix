@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""."""
+"""Python module to extend zabbix agent and send Logstash >5 stats to zabbix
+   using zabbix_sender"""
 import os
 import optparse
 import tempfile
