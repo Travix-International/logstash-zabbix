@@ -99,6 +99,7 @@ def main():
                       default="/var/log/zabbix-agent/logstash_zabbix.log")
     parser.add_option('--loglevel', choices=['ERROR', 'DEBUG', 'INFO'],
                       default='INFO')
+    parser.add_option('--check', choices=['stats'], default='stats')
     (options, args) = parser.parse_args()
     logging.basicConfig(filename=options.logfile,
                         level=logging.getLevelName(options.loglevel),
@@ -108,7 +109,8 @@ def main():
                                   options.port)
     api = LogstashAPI(url, conf=options.conf,
                       senderhostname=options.senderhostname)
-    api.get_stats()
+    if options.check == 'stats':
+        api.get_stats()
 
 
 if __name__ == "__main__":
